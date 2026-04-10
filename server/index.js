@@ -145,8 +145,8 @@ app.get('/api/search', async (req, res) => {
   if (q.length < 2) return res.json([]);
 
   const [styleRes, colorRes] = await Promise.all([
-    supabase.from('style_data').select('prdt_cd, prdt_nm, item_group, sesn, stor_qty, est_remaining, mccc, img_url, sale_rt'),
-    supabase.from('color_data').select('prdt_cd, color_cd, prdt_nm, item_group, sesn, stor_qty, est_remaining, mccc, img_url, sale_rt'),
+    supabase.from('style_data').select('prdt_cd, prdt_nm, item_group, sesn, sex, stor_qty, est_remaining, mccc, img_url, sale_rt, forecast_months'),
+    supabase.from('color_data').select('prdt_cd, color_cd, prdt_nm, item_group, sesn, sex, stor_qty, est_remaining, mccc, img_url, sale_rt, forecast_months'),
   ]);
 
   const results = [];

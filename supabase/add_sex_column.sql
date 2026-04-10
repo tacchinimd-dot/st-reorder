@@ -1,0 +1,3 @@
+-- 기존 테이블에 sex 칼럼 추가
+ALTER TABLE style_data ADD COLUMN IF NOT EXISTS sex TEXT DEFAULT '';
+ALTER TABLE color_data ADD COLUMN IF NOT EXISTS sex TEXT DEFAULT '';

@@ -121,7 +121,7 @@ function renderStyleTab(tabId, data, withColor) {
 
     rows += `<tr data-cat="${r.item_group || ''}" data-sesn="${r.sesn || ''}">
       <td>${i + 1}</td><td class="img-cell">${img}</td>
-      <td>${r.item_group || ''}</td><td>${r.sesn || ''}</td>
+      <td>${r.item_group || ''}</td><td>${r.sex || ''}</td><td>${r.sesn || ''}</td>
       <td class="cd clickable" onclick="showDetail('${key}')">${shortCd}</td>
       <td class="left pnm clickable" onclick="showDetail('${key}')" title="${r.prdt_nm || ''}">${r.prdt_nm || ''}</td>
       ${colorTd}
@@ -148,7 +148,7 @@ function renderStyleTab(tabId, data, withColor) {
     </div>
     <div class="count-info">${typeLabel} <strong>${data.length}</strong>개</div>
     <div class="tbl-wrap"><table class="dt" id="tbl-${tabId}"><thead><tr>
-      <th>No</th><th>이미지</th><th>카테고리</th><th>시즌</th><th>품번</th><th>제품명</th>
+      <th>No</th><th>이미지</th><th>카테고리</th><th>성별</th><th>시즌</th><th>품번</th><th>제품명</th>
       ${colorTh}<th>택가</th><th>입고</th><th>판매</th><th>판매율</th><th>재고</th><th>월별예상판매</th><th>예상잔여</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`;
 }
