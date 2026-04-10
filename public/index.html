@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ST 리오더 관리</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Malgun Gothic','Segoe UI',sans-serif;background:#f5f6fa;color:#2d2d2d;line-height:1.5}
+.header{background:linear-gradient(135deg,#1a237e,#006AE6);color:#fff;padding:24px 32px 18px}
+.header h1{font-size:22px;font-weight:700;margin-bottom:4px}.header .meta{font-size:12px;opacity:.85}
+.header .kpi-bar{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap}
+.header .kpi{background:rgba(255,255,255,.15);border-radius:8px;padding:10px 16px;min-width:110px}
+.header .kpi .kl{font-size:10px;opacity:.8}.header .kpi .kv{font-size:18px;font-weight:700}.header .kpi .ks{font-size:10px;opacity:.7}
+.kpi-clickable{cursor:pointer;transition:background .2s}.kpi-clickable:hover{background:rgba(255,255,255,.25)!important}
+.tab-bar{display:flex;background:#fff;border-bottom:2px solid #e0e3ea;padding:0 12px;box-shadow:0 2px 4px rgba(0,0,0,.05);flex-wrap:wrap}
+.tab-btn{padding:11px 14px;font-size:12px;font-weight:600;color:#8a8a9a;border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;transition:.2s;white-space:nowrap}
+.tab-btn:hover{color:#006AE6}.tab-btn.active{color:#006AE6;border-bottom-color:#006AE6}
+.tab-content{display:none;padding:16px 20px}.tab-content.active{display:block}
+.loading{text-align:center;padding:60px;color:#888;font-size:14px}
+.tbl-wrap{background:#fff;border-radius:10px;overflow-x:auto;box-shadow:0 1px 4px rgba(0,0,0,.06);max-height:78vh;overflow-y:auto}
+table.dt{width:100%;border-collapse:collapse;font-size:13px}
+.dt thead th{background:#1a237e;color:#fff;padding:9px 8px;text-align:center;font-weight:600;font-size:11px;white-space:nowrap;position:sticky;top:0;z-index:5;cursor:pointer;user-select:none}
+.dt thead th:hover{background:#283593}
+.dt tbody td{padding:7px 8px;text-align:center;border-bottom:1px solid #eef0f4;white-space:nowrap;font-size:13px}
+.dt tbody td.left{text-align:left}.dt tbody td.right{text-align:right}
+.dt tbody td.cd{font-family:monospace;font-size:12px;color:#555}
+.dt tbody tr:hover{background:#e8f0fe!important}.dt tbody tr:nth-child(even){background:#fafbfd}
+.pnm{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clickable{cursor:pointer;color:#006AE6;text-decoration:underline}.clickable:hover{color:#0055b8}
+.img-cell{width:64px;height:64px;padding:3px!important}.img-cell img{width:56px;height:56px;object-fit:contain;border-radius:6px;background:#f0f2f5}
+.rt-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-weight:700;font-size:11px}
+.rt-high{background:#ff6352;color:#fff}.rt-mid{background:#ffa000;color:#fff}
+.fc-cell{padding:3px 4px!important;min-width:260px}
+.bar-chart{display:flex;align-items:flex-end;gap:1px;height:56px}
+.bc{display:flex;flex-direction:column;align-items:center;flex:1;min-width:16px}
+.b{width:12px;border-radius:2px 2px 0 0;min-height:2px}.bar-a{background:#4caf50}.bar-f{background:#ff9800}.bar-m{background:linear-gradient(to top,#4caf50 50%,#ff9800 50%)}
+.bv{font-size:8px;color:#555;margin-top:1px;line-height:1}.bm{font-size:7px;color:#999;line-height:1}
+.rem-danger{color:#d32f2f!important;background:#ffebee!important}.rem-warn{color:#e65100!important;background:#fff3e0!important}
+.legend{display:flex;gap:14px;margin-bottom:8px;font-size:11px;align-items:center;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:4px}.legend .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+.calc-input-area{background:#fff;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06);position:relative}
+.calc-search{width:100%;padding:10px 14px;border:2px solid #006AE6;border-radius:8px;font-size:14px;outline:none}
+.calc-search:focus{box-shadow:0 0 0 3px rgba(0,106,230,.15)}
+.calc-suggestions{position:absolute;background:#fff;border:1px solid #ddd;border-radius:8px;max-height:300px;overflow-y:auto;width:calc(100% - 32px);z-index:200;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none}
+.sug-item{padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;display:flex;gap:8px;align-items:center}
+.sug-item:hover{background:#e8f0fe}
+.sug-cd{font-family:monospace;color:#006AE6;font-weight:600}.sug-nm{color:#333}.sug-ig{color:#999;font-size:11px}
+.sug-cc{background:#e8f5e9;padding:1px 6px;border-radius:3px;font-size:10px}
+.sug-mccc{background:#9e9e9e;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:4px}
+.section-title{font-size:15px;font-weight:700;color:#1a237e;margin:20px 0 10px;padding-bottom:6px;border-bottom:2px solid #e0e3ea}
+.summary-cards{display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.sc{flex:1;min-width:120px;background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 4px rgba(0,0,0,.06);border-left:4px solid #006AE6}
+.sc.red{border-left-color:#FF6352}.sc.orange{border-left-color:#FFA000}.sc.green{border-left-color:#00B894}
+.sc .sl{font-size:10px;color:#8a8a9a;margin-bottom:2px}.sc .sv{font-size:17px;font-weight:700}.sc .ss{font-size:10px;color:#8a8a9a;margin-top:1px}
+.calc-reorder-qty{width:80px;padding:4px 6px;border:1px solid #d0d3da;border-radius:4px;font-size:12px;text-align:right}
+.decision-select{padding:3px 6px;border:1px solid #d0d3da;border-radius:4px;font-size:11px;background:#fff}
+.reorder-memo{width:110px;padding:3px 6px;border:1px solid #d0d3da;border-radius:4px;font-size:11px}
+.btn{padding:7px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s}
+.btn-primary{background:#006AE6;color:#fff}.btn-primary:hover{background:#0055b8}
+.btn-secondary{background:#e0e3ea;color:#555}.btn-danger{background:#ff6352;color:#fff}
+.btn-sm{padding:4px 10px;font-size:11px}
+.action-bar{display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
+.urgent-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+.urgent-critical{background:#ffcdd2!important}.urgent-critical .urgent-badge{background:#d32f2f;color:#fff}
+.urgent-warn{background:#fff3e0!important}.urgent-warn .urgent-badge{background:#ff9800;color:#fff}
+.review-badge{background:#fce4ec;color:#d32f2f;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700}
+/* 모달 */
+.modal-bg{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:500;justify-content:center;align-items:flex-start;padding-top:40px}
+.modal-bg.open{display:flex}
+.modal{background:#fff;border-radius:12px;width:90%;max-width:900px;max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.2);padding:24px}
+.modal-close{float:right;font-size:24px;cursor:pointer;color:#999;border:none;background:none}.modal-close:hover{color:#333}
+.modal h2{font-size:18px;margin-bottom:4px}.modal .modal-sub{font-size:12px;color:#888;margin-bottom:16px}
+.modal .modal-kpi{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.modal .mk{background:#f5f6fa;border-radius:8px;padding:10px 14px;min-width:100px}
+.modal .mk .mkl{font-size:10px;color:#888}.modal .mk .mkv{font-size:16px;font-weight:700}
+.modal .month-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px}
+.modal .month-table th{background:#f0f2f5;padding:6px 8px;font-size:11px}.modal .month-table td{padding:6px 8px;text-align:center;border-bottom:1px solid #eee}
+.modal .month-table td.ma{background:#e8f5e9;color:#2e7d32;font-weight:600}
+.modal .month-table td.mf{background:#fff3e0;color:#e65100;font-style:italic}
+.modal .month-table td.mm{background:linear-gradient(to right,#e8f5e9 50%,#fff3e0 50%);color:#6d4c00;font-weight:600}
+.modal .color-table{width:100%;border-collapse:collapse;font-size:12px}
+.modal .color-table th{background:#e3f0ff;padding:6px 8px;font-size:11px;color:#1a237e}.modal .color-table td{padding:6px 8px;text-align:center;border-bottom:1px solid #eee}
+/* 리오더 점검 패널 */
+.review-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.3);z-index:400}
+.review-overlay.open{display:block}
+.review-panel{position:fixed;top:0;right:-500px;width:480px;height:100%;background:#fff;z-index:450;box-shadow:-4px 0 16px rgba(0,0,0,.15);transition:right .3s;overflow-y:auto}
+.review-panel.open{right:0}
+.review-header{padding:20px 20px 12px;border-bottom:2px solid #e0e3ea;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.review-header h3{font-size:16px;color:#1a237e;flex:1}
+.review-body{padding:12px}
+.review-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #eef0f4;font-size:12px;transition:background .15s}
+.review-item:hover{background:#f5f6fa}
+.ri-img{width:44px;height:44px;border-radius:6px;background:#f0f2f5;object-fit:contain}
+.ri-info{flex:1;min-width:0}
+.ri-cd{font-family:monospace;color:#006AE6;cursor:pointer;font-size:11px}.ri-cd:hover{text-decoration:underline}
+.ri-nm{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.ri-cc{background:#e8f5e9;padding:1px 5px;border-radius:3px;font-size:10px}
+.ri-meta{font-size:10px;color:#888}
+.ri-rem{font-weight:700;color:#d32f2f;font-size:13px;min-width:50px;text-align:right}
+.ri-btn{padding:4px 10px;border:none;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;background:#006AE6;color:#fff;white-space:nowrap}
+.ri-btn:hover{background:#0055b8}
+.count-info{font-size:11px;color:#8a8a9a;margin-bottom:6px}
+.footer{text-align:center;padding:14px;font-size:10px;color:#8a8a9a;border-top:1px solid #e0e3ea;margin-top:20px}
+</style>
+</head>
+<body>
+
+<div class="header">
+<h1>ST (Sergio Tacchini) 리오더 관리</h1>
+<div class="meta" id="header-meta">로딩 중...</div>
+<div class="kpi-bar" id="kpi-bar"></div>
+</div>
+
+<div class="tab-bar">
+<button class="tab-btn active" onclick="switchTab('calc')">리오더 계산기</button>
+<button class="tab-btn" onclick="switchTab('ws')">의류 스타일</button>
+<button class="tab-btn" onclick="switchTab('wc')">의류 컬러</button>
+<button class="tab-btn" onclick="switchTab('as')">용품 스타일</button>
+<button class="tab-btn" onclick="switchTab('ac')">용품 컬러</button>
+</div>
+
+<div id="tab-calc" class="tab-content active"><div class="loading">데이터 로딩 중...</div></div>
+<div id="tab-ws" class="tab-content"><div class="loading">데이터 로딩 중...</div></div>
+<div id="tab-wc" class="tab-content"><div class="loading">데이터 로딩 중...</div></div>
+<div id="tab-as" class="tab-content"><div class="loading">데이터 로딩 중...</div></div>
+<div id="tab-ac" class="tab-content"><div class="loading">데이터 로딩 중...</div></div>
+
+<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
+<div class="modal" id="modal-content"></div>
+</div>
+
+<div class="review-panel" id="review-panel">
+<div class="review-header">
+<h3>리오더 점검 <span id="review-count"></span></h3>
+<button class="modal-close" onclick="closeReviewPanel()">&times;</button>
+</div>
+<div class="review-body" id="review-body"></div>
+</div>
+<div class="review-overlay" id="review-overlay" onclick="closeReviewPanel()"></div>
+
+<div class="footer">ST 리오더 관리 | Sergio Tacchini | DCS AI</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
