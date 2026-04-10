@@ -7,7 +7,7 @@ const API = ''; // 같은 origin이므로 빈 문자열
 const MONTHS = ['202601','202602','202603','202604','202605','202606','202607','202608','202609','202610','202611','202612'];
 const MLABELS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const LEAD_TIME_WEEKS = 10; // 리드타임 평균 (8~12주)
-let TARGET_SELL_THROUGH = parseFloat(localStorage.getItem('st_target_st') || '0.75'); // 목표 판매율 기본 75%
+const TARGET_SELL_THROUGH = 0.75; // 목표 판매율 75% 고정
 
 let styleData = [];
 let colorData = [];
@@ -22,7 +22,7 @@ let selectedCalcIds = new Set();
 
 // ── 사용자 이름 ──
 function ensureUser() {
-  if (!currentUser) {
+  if (!currentUser || currentUser === 'unknown') {
     const name = prompt('사용자 이름을 입력하세요 (팀원 식별용):');
     if (name && name.trim()) {
       currentUser = name.trim();
@@ -32,6 +32,16 @@ function ensureUser() {
     }
   }
   return currentUser;
+}
+
+function changeUser() {
+  const name = prompt('사용자 이름을 변경합니다:', currentUser);
+  if (name && name.trim()) {
+    currentUser = name.trim();
+    localStorage.setItem('st_reorder_user', currentUser);
+    const el = document.getElementById('current-user-label');
+    if (el) el.textContent = currentUser;
+  }
 }
 
 // ── 초기화 ──
@@ -80,8 +90,8 @@ function renderKPI() {
   const wearColor = colorData.filter(r => r.sesn && (r.sesn.endsWith('S') || r.sesn.endsWith('F'))).length;
   const accColor = colorData.filter(r => r.sesn && r.sesn.endsWith('N')).length;
 
-  document.getElementById('header-meta').textContent =
-    `26SS+26N | 입고=판매+재고 | 리드타임 8~12주`;
+  document.getElementById('header-meta').innerHTML =
+    `26SS+26N | 입고=판매+재고 | 리드타임 8~12주 | 사용자: <strong id="current-user-label">${currentUser}</strong> <button onclick="changeUser()" style="background:rgba(255,255,255,.2);border:none;color:#fff;padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;margin-left:4px">변경</button>`;
 
   document.getElementById('kpi-bar').innerHTML = `
     <div class="kpi"><div class="kl">의류</div><div class="kv">${wearCnt}</div><div class="ks">컬러${wearColor}</div></div>
@@ -454,13 +464,11 @@ function closeModal() { document.getElementById('modal-bg').classList.remove('op
 
 // ── 리오더 계산기 ──
 function renderCalcTab() {
-  const curTarget = Math.round(TARGET_SELL_THROUGH * 100);
   document.getElementById('tab-calc').innerHTML = `
     <div class="calc-input-area" style="position:relative">
       <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <div style="font-size:14px;font-weight:700;color:#1a237e;flex:1">리오더 아이템 추가</div>
-        <label style="font-size:11px;color:#555">목표 판매율: <strong id="target-st-label">${curTarget}%</strong></label>
-        <input type="range" min="60" max="90" step="5" value="${curTarget}" oninput="updateTargetSellThrough(this.value/100)" style="width:140px">
+        <span style="font-size:11px;color:#555">목표 판매율 <strong>75%</strong> (리오더 후 재고 여유 확보)</span>
         <button class="btn btn-secondary btn-sm" onclick="openNewColorModal()">+ 신규 컬러 추가</button>
       </div>
       <input class="calc-search" id="calc-search" placeholder="품번 또는 제품명을 입력하여 검색" oninput="onCalcSearch()" onfocus="onCalcSearch()">
@@ -577,22 +585,6 @@ function addToCalcDirect(item, colorCd, opts = {}) {
   renderCalcRows();
 }
 
-// 목표 판매율 변경 시 모든 계산기 행 재계산
-function updateTargetSellThrough(v) {
-  TARGET_SELL_THROUGH = v;
-  localStorage.setItem('st_target_st', v);
-  for (const r of calcRows) {
-    const rec = calcRecommended(r.stor, r.forecastMonths || {});
-    r.totalForecast = rec.total;
-    r.requiredTotal = rec.required;
-    r.recommendedQty = rec.reorder;
-    r.reorderQty = rec.reorder;
-    r.finalSellRt = rec.finalSellRt;
-  }
-  renderCalcRows();
-  const lbl = document.getElementById('target-st-label');
-  if (lbl) lbl.textContent = Math.round(v * 100) + '%';
-}
 
 function renderCalcRows() {
   const pb = document.getElementById('calc-pending-body');
@@ -681,6 +673,7 @@ async function updateDecidedDate(id, val) {
         prdt_nm: r.nm, item_group: r.ig, category_type: r.tp,
         decision: r.decision, reorder_qty: r.reorderQty, memo: r.memo,
         agreed_delivery_date: val || null,
+        decided_by: currentUser,
         snapshot_stor_qty: r.stor, snapshot_est_remaining: r.rem, snapshot_sale_rt: r.saleRt,
       })
     });
@@ -708,6 +701,7 @@ async function onDecision(id, val) {
         prdt_nm: r.nm, item_group: r.ig, category_type: r.tp,
         decision: val, reorder_qty: r.reorderQty, memo: r.memo,
         agreed_delivery_date: r.deliveryDate || null,
+        decided_by: currentUser,
         snapshot_stor_qty: r.stor, snapshot_est_remaining: r.rem,
         snapshot_sale_rt: r.saleRt,
       })
@@ -727,7 +721,7 @@ async function undoDecision(id) {
   renderCalcRows();
 
   try {
-    await fetch(API + '/api/decisions/' + encodeURIComponent(r.cd) + '/' + encodeURIComponent(r.cc || ''), { method: 'DELETE' });
+    await fetch(API + '/api/decisions/' + encodeURIComponent(r.cd) + '/' + encodeURIComponent(r.cc || '') + '?by=' + encodeURIComponent(currentUser), { method: 'DELETE' });
   } catch (e) { console.error('결정 삭제 실패:', e); }
 }
 
