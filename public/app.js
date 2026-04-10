@@ -348,11 +348,15 @@ function renderStyleTab(tabId, data, withColor) {
     const colorTd = withColor ? `<td>${r.color_cd || ''}</td>` : '';
     const shortCd = r.prdt_cd.length > 9 ? r.prdt_cd.slice(-9) : r.prdt_cd;
 
+    const growthBadge = r.high_growth
+      ? `<span class="growth-badge" data-key="${key}" title="전년 동기간 대비 ${r.growth_ratio}배">🔥${r.growth_ratio}x</span>`
+      : '';
+
     rows += `<tr data-cat="${r.item_group || ''}" data-sesn="${r.sesn || ''}">
       <td>${i + 1}</td><td class="img-cell">${img}</td>
       <td>${r.item_group || ''}</td><td>${r.sex || ''}</td><td>${r.sesn || ''}</td>
       <td class="cd clickable" onclick="showDetail('${key}')">${shortCd}</td>
-      <td class="left pnm clickable" onclick="showDetail('${key}')" title="${r.prdt_nm || ''}">${r.prdt_nm || ''}</td>
+      <td class="left pnm clickable" onclick="showDetail('${key}')" title="${r.prdt_nm || ''}">${r.prdt_nm || ''} ${growthBadge}</td>
       ${colorTd}
       <td class="right">${(r.tag_price || 0).toLocaleString()}</td>
       <td class="right">${(r.stor_qty || 0).toLocaleString()}</td>
@@ -380,6 +384,93 @@ function renderStyleTab(tabId, data, withColor) {
       <th>No</th><th>이미지</th><th>카테고리</th><th>성별</th><th>시즌</th><th>품번</th><th>제품명</th>
       ${colorTh}<th>택가</th><th>입고</th><th>판매</th><th>판매율</th><th>재고</th><th>월별예상판매</th><th>예상잔여</th><th>마감예상판매율</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`;
+
+  // 뱃지 클릭 바인딩
+  tab.querySelectorAll('.growth-badge').forEach(el => {
+    el.onclick = function (e) {
+      e.stopPropagation();
+      showGrowthComparison(this.getAttribute('data-key'), withColor);
+    };
+  });
+}
+
+// ── 전년 대비 비교 팝업 ──
+async function showGrowthComparison(key, isColor) {
+  const parts = key.split('|');
+  const prdt_cd = parts[0];
+  const color_cd = parts[1] || '';
+
+  try {
+    const res = await fetch(API + '/api/detail/' + prdt_cd);
+    const { style, colors } = await res.json();
+    const target = color_cd ? (colors.find(c => c.color_cd === color_cd) || style) : style;
+    if (!target) { alert('데이터 없음'); return; }
+
+    const fm = target.forecast_months || {};
+    const pc = target.prev_comparison || {};
+    const growth = target.growth_ratio || 0;
+
+    let h = '<button class="modal-close" onclick="closeModal()">&times;</button>';
+    h += `<h2>🔥 전년 대비 판매 비교</h2>`;
+    h += `<div class="modal-sub">${target.prdt_cd.slice(-9)}${color_cd ? ' / ' + color_cd : ''} | ${target.prdt_nm} | 전년 동기 대비 <strong style="color:#d32f2f">${growth}배</strong></div>`;
+
+    // 월별 비교 테이블
+    h += '<table class="month-table"><thead><tr><th></th>';
+    MLABELS.forEach(l => h += '<th>' + l + '</th>');
+    h += '<th>합계</th></tr></thead><tbody>';
+
+    // 올해 실적+예측
+    const now = new Date();
+    const curYYMM = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+    let currTotal = 0, prevTotal = 0, elapsedCurr = 0, elapsedPrev = 0;
+    h += '<tr><td style="font-weight:600;background:#e8f5e9">올해</td>';
+    MONTHS.forEach(m => {
+      const v = fm[m] || 0;
+      currTotal += v;
+      if (m <= curYYMM) elapsedCurr += v;
+      const cls = m < curYYMM ? 'ma' : (m === curYYMM ? 'mm' : 'mf');
+      h += `<td class="${cls}">${Math.round(v).toLocaleString()}</td>`;
+    });
+    h += `<td style="font-weight:700">${Math.round(currTotal).toLocaleString()}</td></tr>`;
+
+    // 전년 동월
+    h += '<tr><td style="font-weight:600;background:#f0f2f5">전년</td>';
+    MONTHS.forEach(m => {
+      const v = pc[m] || 0;
+      prevTotal += v;
+      if (m <= curYYMM) elapsedPrev += v;
+      h += `<td>${Math.round(v).toLocaleString()}</td>`;
+    });
+    h += `<td style="font-weight:700">${Math.round(prevTotal).toLocaleString()}</td></tr>`;
+
+    // 전년 대비 비율
+    h += '<tr><td style="font-weight:600;background:#fff3e0">전년비</td>';
+    MONTHS.forEach(m => {
+      const c = fm[m] || 0;
+      const p = pc[m] || 0;
+      const r = p > 0 ? (c / p * 100).toFixed(0) + '%' : '-';
+      const cl = p > 0 && c / p >= 2 ? 'style="color:#d32f2f;font-weight:700"' : '';
+      h += `<td ${cl}>${r}</td>`;
+    });
+    const totalR = prevTotal > 0 ? (currTotal / prevTotal * 100).toFixed(0) + '%' : '-';
+    h += `<td style="font-weight:700">${totalR}</td></tr>`;
+
+    h += '</tbody></table>';
+
+    // 해석
+    h += '<div style="margin-top:12px;padding:12px;background:#fff3e0;border-radius:8px;font-size:12px;line-height:1.7">';
+    h += `<strong>💡 실무자 판단 가이드</strong><br>`;
+    h += `• 경과월(~${curYYMM.slice(4)}월) 올해 실적: <strong>${elapsedCurr.toLocaleString()}</strong>개<br>`;
+    h += `• 경과월 전년 동기: <strong>${elapsedPrev.toLocaleString()}</strong>개<br>`;
+    h += `• 성장률 ${growth}배 → 예측도 그만큼 상승함<br>`;
+    h += `• 이벤트성 단발 판매인지, 지속 가능한 성장인지 <strong>실무자 판단 필요</strong>`;
+    h += '</div>';
+
+    document.getElementById('modal-content').innerHTML = h;
+    document.getElementById('modal-bg').classList.add('open');
+  } catch (e) {
+    alert('비교 조회 실패: ' + e.message);
+  }
 }
 
 // ── 상세 팝업 ──
