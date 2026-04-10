@@ -30,9 +30,11 @@ async function init() {
     decisions = dRes;
     decidedRows = dRes.map(d => ({
       id: calcId++, key: d.color_cd ? d.prdt_cd + '|' + d.color_cd : d.prdt_cd,
-      cd: d.prdt_cd, cc: d.color_cd || '', nm: '', ig: '', tp: '',
+      cd: d.prdt_cd, cc: d.color_cd || '',
+      nm: d.prdt_nm || '', ig: d.item_group || '', tp: d.category_type || '',
       stor: d.snapshot_stor_qty, rem: d.snapshot_est_remaining,
       reorderQty: d.reorder_qty, decision: d.decision, memo: d.memo,
+      deliveryDate: d.agreed_delivery_date || '',
       needsReview: d.needs_review, reviewReason: d.review_reason,
     }));
 
@@ -242,14 +244,14 @@ function renderCalcTab() {
     <div class="section-title">리오더 계산</div>
     <div class="tbl-wrap"><table class="dt" id="tbl-calc-pending"><thead><tr>
       <th>No</th><th>구분</th><th>카테고리</th><th>품번</th><th>제품명</th><th>컬러</th>
-      <th>입고</th><th>예상잔여</th><th>부족수량</th><th>소진월</th><th>발주마감(8주)</th><th>긴급도</th>
-      <th>리오더수량</th><th>리오더후잔여</th><th>결정</th><th>메모</th><th>삭제</th>
+      <th>입고</th><th>예상잔여</th><th>부족수량</th><th>소진월</th><th>발주마감(8주)</th>
+      <th>리오더수량</th><th>리오더후잔여</th><th>합의납기일</th><th>결정</th><th>메모</th><th>삭제</th>
     </tr></thead><tbody id="calc-pending-body"></tbody></table></div>
     <div class="section-title" style="margin-top:24px">리오더 결정사항</div>
     <div class="action-bar"><button class="btn btn-primary" onclick="exportDecidedCSV()">CSV 내보내기</button></div>
     <div class="tbl-wrap"><table class="dt" id="tbl-calc-decided"><thead><tr>
       <th>No</th><th>구분</th><th>카테고리</th><th>품번</th><th>제품명</th><th>컬러</th>
-      <th>입고</th><th>예상잔여</th><th>리오더수량</th><th>결정</th><th>메모</th><th>재점검</th><th>되돌리기</th>
+      <th>입고</th><th>예상잔여</th><th>리오더수량</th><th>합의납기일</th><th>결정</th><th>메모</th><th>재점검</th><th>되돌리기</th>
     </tr></thead><tbody id="calc-decided-body"></tbody></table></div>
   `;
   renderCalcRows();
@@ -304,23 +306,19 @@ function addToCalcDirect(item, colorCd) {
   let soMonth = null, cumul = 0;
   for (const m of MONTHS) { cumul += (fm[m] || 0); if (cumul >= (item.stor_qty || 0)) { soMonth = m; break; } }
 
-  let deadline = '-', urgentCls = '', urgentLabel = '정상';
+  let deadline = '-';
   if (soMonth) {
     const soDate = new Date(parseInt(soMonth.slice(0, 4)), parseInt(soMonth.slice(4)) - 1, 1);
     const dl8 = new Date(soDate.getTime() - 8 * 7 * 24 * 3600 * 1000);
-    const dl12 = new Date(soDate.getTime() - 12 * 7 * 24 * 3600 * 1000);
-    const now = new Date();
     deadline = (dl8.getMonth() + 1) + '/' + dl8.getDate();
-    if (now > dl12) { urgentCls = 'urgent-critical'; urgentLabel = '즉시발주!'; }
-    else if (now > dl8) { urgentCls = 'urgent-warn'; urgentLabel = '긴급'; }
   }
 
   calcRows.push({
     id: calcId++, key, cd: item.prdt_cd, cc: colorCd, nm: item.prdt_nm || '',
     ig: item.item_group || '', tp, stor: item.stor_qty || 0, rem,
     saleRt: item.sale_rt || 0,
-    shortage, soMonth, deadline, urgentCls, urgentLabel,
-    reorderQty: shortage, decision: '', memo: ''
+    shortage, soMonth, deadline,
+    reorderQty: shortage, decision: '', memo: '', deliveryDate: ''
   });
   renderCalcRows();
 }
@@ -335,7 +333,7 @@ function renderCalcRows() {
     const after = (r.rem || 0) + r.reorderQty;
     const afterStyle = after >= 0 ? 'color:#2e7d32' : 'color:#d32f2f';
     const shortCd = r.cd.length > 9 ? r.cd.slice(-9) : r.cd;
-    return `<tr class="${r.urgentCls}">
+    return `<tr>
       <td>${i + 1}</td><td>${r.tp}</td><td>${r.ig}</td>
       <td class="cd clickable" data-key="${r.key}">${shortCd}</td>
       <td class="left pnm clickable" data-key="${r.key}">${r.nm}</td>
@@ -344,9 +342,9 @@ function renderCalcRows() {
       <td class="right ${remCls}">${r.rem !== null ? r.rem.toLocaleString() : '-'}</td>
       <td class="right">${(r.shortage || 0).toLocaleString()}</td>
       <td>${soLabel}</td><td>${r.deadline}</td>
-      <td><span class="urgent-badge">${r.urgentLabel}</span></td>
       <td><input type="number" class="calc-reorder-qty" value="${r.reorderQty}" min="0" onchange="updateCalcQty(${r.id},this.value)"></td>
       <td class="right" style="${afterStyle};font-weight:700">${(after >= 0 ? '+' : '') + after.toLocaleString()}</td>
+      <td><input type="date" class="calc-date" value="${r.deliveryDate || ''}" onchange="updateCalcDate(${r.id},this.value)"></td>
       <td><select class="decision-select" onchange="onDecision(${r.id},this.value)"><option value="">선택</option><option value="진행">리오더 진행</option><option value="보류">보류</option><option value="불필요">불필요</option></select></td>
       <td><input type="text" class="reorder-memo" value="${r.memo}" onchange="updateCalcMemo(${r.id},this.value)"></td>
       <td><button class="btn btn-danger btn-sm" onclick="removeCalcRow(${r.id})">×</button></td></tr>`;
@@ -366,21 +364,47 @@ function renderCalcRows() {
     const shortCd = r.cd.length > 9 ? r.cd.slice(-9) : r.cd;
     return `<tr>
       <td>${i + 1}</td><td>${r.tp || ''}</td><td>${r.ig || ''}</td>
-      <td class="cd">${shortCd}</td><td class="left pnm">${r.nm}</td>
+      <td class="cd clickable" data-key="${r.key}">${shortCd}</td>
+      <td class="left pnm clickable" data-key="${r.key}">${r.nm}</td>
       <td>${r.cc || '-'}</td>
       <td class="right">${(r.stor || 0).toLocaleString()}</td>
       <td class="right">${r.rem !== null ? r.rem.toLocaleString() : '-'}</td>
       <td class="right">${(r.reorderQty || 0).toLocaleString()}</td>
+      <td><input type="date" class="calc-date" value="${r.deliveryDate || ''}" onchange="updateDecidedDate(${r.id},this.value)"></td>
       <td><strong>${r.decision}</strong></td><td>${r.memo || ''}</td>
       <td>${reviewTag}</td>
       <td><button class="btn btn-secondary btn-sm" onclick="undoDecision(${r.id})">↩</button></td></tr>`;
   }).join('');
+
+  db.querySelectorAll('.clickable[data-key]').forEach(el => {
+    el.onclick = function () { showDetail(this.getAttribute('data-key')); };
+  });
 
   document.getElementById('calc-decided').textContent = decidedRows.length;
 }
 
 function updateCalcQty(id, val) { const r = calcRows.find(x => x.id === id); if (r) r.reorderQty = parseInt(val) || 0; renderCalcRows(); }
 function updateCalcMemo(id, val) { const r = calcRows.find(x => x.id === id); if (r) r.memo = val; }
+function updateCalcDate(id, val) { const r = calcRows.find(x => x.id === id); if (r) r.deliveryDate = val; }
+async function updateDecidedDate(id, val) {
+  const r = decidedRows.find(x => x.id === id);
+  if (!r) return;
+  r.deliveryDate = val;
+  // 서버에 업데이트
+  try {
+    await fetch(API + '/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prdt_cd: r.cd, color_cd: r.cc, item_type: 'color',
+        prdt_nm: r.nm, item_group: r.ig, category_type: r.tp,
+        decision: r.decision, reorder_qty: r.reorderQty, memo: r.memo,
+        agreed_delivery_date: val || null,
+        snapshot_stor_qty: r.stor, snapshot_est_remaining: r.rem, snapshot_sale_rt: r.saleRt,
+      })
+    });
+  } catch (e) { console.error(e); }
+}
 function removeCalcRow(id) { calcRows = calcRows.filter(x => x.id !== id); renderCalcRows(); }
 
 async function onDecision(id, val) {
@@ -399,8 +423,10 @@ async function onDecision(id, val) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prdt_cd: r.cd, color_cd: r.cc, item_type: r.cc ? 'color' : 'style',
+        prdt_cd: r.cd, color_cd: r.cc, item_type: 'color',
+        prdt_nm: r.nm, item_group: r.ig, category_type: r.tp,
         decision: val, reorder_qty: r.reorderQty, memo: r.memo,
+        agreed_delivery_date: r.deliveryDate || null,
         snapshot_stor_qty: r.stor, snapshot_est_remaining: r.rem,
         snapshot_sale_rt: r.saleRt,
       })
@@ -481,9 +507,9 @@ function renderReviewPanel() {
 
 // ── CSV 내보내기 ──
 function exportDecidedCSV() {
-  let csv = '\uFEFFNo,구분,카테고리,품번,제품명,컬러,입고,예상잔여,리오더수량,결정,메모\n';
+  let csv = '\uFEFFNo,구분,카테고리,품번,제품명,컬러,입고,예상잔여,리오더수량,합의납기일,결정,메모\n';
   decidedRows.forEach((r, i) => {
-    const v = [i + 1, r.tp, r.ig, r.cd.slice(-9), r.nm, r.cc || '-', r.stor, r.rem || 0, r.reorderQty, r.decision, r.memo];
+    const v = [i + 1, r.tp, r.ig, r.cd.slice(-9), r.nm, r.cc || '-', r.stor, r.rem || 0, r.reorderQty, r.deliveryDate || '', r.decision, r.memo];
     csv += v.map(x => '"' + String(x).replace(/"/g, '""') + '"').join(',') + '\n';
   });
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

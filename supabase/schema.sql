@@ -54,9 +54,15 @@ CREATE TABLE IF NOT EXISTS reorder_decisions (
   prdt_cd TEXT NOT NULL,
   color_cd TEXT DEFAULT '',
   item_type TEXT DEFAULT 'color',  -- 'style' or 'color'
+  -- 표시용 정보 (재로드 시 표시를 위해 보관)
+  prdt_nm TEXT DEFAULT '',
+  item_group TEXT DEFAULT '',
+  category_type TEXT DEFAULT '',  -- '의류' or '용품'
   decision TEXT NOT NULL,          -- '진행', '보류', '불필요'
   reorder_qty INTEGER DEFAULT 0,
   memo TEXT DEFAULT '',
+  -- 합의납기일 (사용자 입력)
+  agreed_delivery_date DATE,
   -- 결정 당시 스냅샷 (재점검 판단용)
   snapshot_stor_qty INTEGER,
   snapshot_est_remaining INTEGER,

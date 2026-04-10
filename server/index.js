@@ -71,14 +71,18 @@ app.get('/api/decisions', async (req, res) => {
 
 // 결정 저장 (upsert)
 app.post('/api/decisions', async (req, res) => {
-  const { prdt_cd, color_cd = '', item_type = 'color', decision, reorder_qty = 0,
-          memo = '', decided_by = 'unknown',
+  const { prdt_cd, color_cd = '', item_type = 'color',
+          prdt_nm = '', item_group = '', category_type = '',
+          decision, reorder_qty = 0, memo = '', decided_by = 'unknown',
+          agreed_delivery_date = null,
           snapshot_stor_qty, snapshot_est_remaining, snapshot_sale_rt } = req.body;
 
   const { data, error } = await supabase
     .from('reorder_decisions')
     .upsert({
-      prdt_cd, color_cd, item_type, decision, reorder_qty, memo, decided_by,
+      prdt_cd, color_cd, item_type, prdt_nm, item_group, category_type,
+      decision, reorder_qty, memo, decided_by,
+      agreed_delivery_date,
       snapshot_stor_qty, snapshot_est_remaining, snapshot_sale_rt,
       needs_review: false, review_reason: '',
       decided_at: new Date().toISOString(),
@@ -139,29 +143,23 @@ app.get('/api/refresh-log', async (req, res) => {
   res.json(data);
 });
 
-// ── 검색 (계산기 추가용) ──
+// ── 검색 (컬러 단위만) ──
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').toLowerCase();
   if (q.length < 2) return res.json([]);
 
-  const [styleRes, colorRes] = await Promise.all([
-    supabase.from('style_data').select('prdt_cd, prdt_nm, item_group, sesn, sex, stor_qty, est_remaining, mccc, img_url, sale_rt, forecast_months'),
-    supabase.from('color_data').select('prdt_cd, color_cd, prdt_nm, item_group, sesn, sex, stor_qty, est_remaining, mccc, img_url, sale_rt, forecast_months'),
-  ]);
+  const { data: colorRes } = await supabase
+    .from('color_data')
+    .select('prdt_cd, color_cd, prdt_nm, item_group, sesn, sex, stor_qty, est_remaining, mccc, img_url, sale_rt, forecast_months');
 
   const results = [];
-  for (const r of (styleRes.data || [])) {
-    if ((r.prdt_cd + ' ' + r.prdt_nm).toLowerCase().includes(q)) {
-      results.push({ ...r, type: 'style', color_cd: '' });
-    }
-  }
-  for (const r of (colorRes.data || [])) {
+  for (const r of (colorRes || [])) {
     if ((r.prdt_cd + ' ' + r.prdt_nm + ' ' + r.color_cd).toLowerCase().includes(q)) {
       results.push({ ...r, type: 'color' });
     }
   }
 
-  res.json(results.slice(0, 20));
+  res.json(results.slice(0, 30));
 });
 
 // SPA fallback
