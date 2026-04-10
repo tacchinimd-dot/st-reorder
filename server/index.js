@@ -77,6 +77,12 @@ app.post('/api/decisions', async (req, res) => {
           agreed_delivery_date = null,
           snapshot_stor_qty, snapshot_est_remaining, snapshot_sale_rt } = req.body;
 
+  // 기존 상태 조회 (이력 기록용)
+  const { data: prev } = await supabase
+    .from('reorder_decisions')
+    .select('decision, reorder_qty, agreed_delivery_date, memo')
+    .eq('prdt_cd', prdt_cd).eq('color_cd', color_cd).maybeSingle();
+
   const { data, error } = await supabase
     .from('reorder_decisions')
     .upsert({
@@ -91,19 +97,73 @@ app.post('/api/decisions', async (req, res) => {
     .select();
 
   if (error) return res.status(500).json({ error: error.message });
+
+  // 이력 기록
+  await supabase.from('decision_history').insert({
+    prdt_cd, color_cd,
+    action: prev ? 'update' : 'create',
+    prev_decision: prev?.decision || '',
+    new_decision: decision,
+    prev_reorder_qty: prev?.reorder_qty ?? null,
+    new_reorder_qty: reorder_qty,
+    prev_delivery_date: prev?.agreed_delivery_date ?? null,
+    new_delivery_date: agreed_delivery_date,
+    prev_memo: prev?.memo || '',
+    new_memo: memo,
+    changed_by: decided_by,
+  });
+
   res.json(data);
 });
 
 // 결정 삭제 (되돌리기)
 app.delete('/api/decisions/:prdt_cd/:color_cd', async (req, res) => {
   const { prdt_cd, color_cd } = req.params;
+  const changedBy = req.query.by || 'unknown';
+
+  const { data: prev } = await supabase
+    .from('reorder_decisions')
+    .select('decision, reorder_qty, agreed_delivery_date, memo')
+    .eq('prdt_cd', prdt_cd).eq('color_cd', color_cd || '').maybeSingle();
+
   const { error } = await supabase
     .from('reorder_decisions')
     .delete()
     .eq('prdt_cd', prdt_cd)
     .eq('color_cd', color_cd || '');
   if (error) return res.status(500).json({ error: error.message });
+
+  if (prev) {
+    await supabase.from('decision_history').insert({
+      prdt_cd, color_cd: color_cd || '',
+      action: 'delete',
+      prev_decision: prev.decision || '',
+      new_decision: '',
+      prev_reorder_qty: prev.reorder_qty,
+      new_reorder_qty: null,
+      prev_delivery_date: prev.agreed_delivery_date,
+      new_delivery_date: null,
+      prev_memo: prev.memo || '',
+      new_memo: '',
+      changed_by: changedBy,
+    });
+  }
+
   res.json({ success: true });
+});
+
+// ── 변경 이력 조회 ──
+app.get('/api/history/:prdt_cd/:color_cd?', async (req, res) => {
+  const { prdt_cd } = req.params;
+  const color_cd = req.params.color_cd || '';
+  const { data, error } = await supabase
+    .from('decision_history')
+    .select('*')
+    .eq('prdt_cd', prdt_cd)
+    .eq('color_cd', color_cd)
+    .order('changed_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 // ── 재점검 필요 항목 조회 ──

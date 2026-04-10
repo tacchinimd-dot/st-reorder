@@ -6,6 +6,8 @@
 const API = ''; // 같은 origin이므로 빈 문자열
 const MONTHS = ['202601','202602','202603','202604','202605','202606','202607','202608','202609','202610','202611','202612'];
 const MLABELS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+const LEAD_TIME_WEEKS = 10; // 리드타임 평균 (8~12주)
+const SAFETY_STOCK_WEEKS = 2; // 안전재고 주수
 
 let styleData = [];
 let colorData = [];
@@ -14,9 +16,27 @@ let decisions = [];
 let calcRows = [];
 let decidedRows = [];
 let calcId = 0;
+let currentUser = localStorage.getItem('st_reorder_user') || '';
+let selectedReviewKeys = new Set();
+let selectedCalcIds = new Set();
+
+// ── 사용자 이름 ──
+function ensureUser() {
+  if (!currentUser) {
+    const name = prompt('사용자 이름을 입력하세요 (팀원 식별용):');
+    if (name && name.trim()) {
+      currentUser = name.trim();
+      localStorage.setItem('st_reorder_user', currentUser);
+    } else {
+      currentUser = 'unknown';
+    }
+  }
+  return currentUser;
+}
 
 // ── 초기화 ──
 async function init() {
+  ensureUser();
   try {
     const [sRes, cRes, rRes, dRes] = await Promise.all([
       fetch(API + '/api/styles').then(r => r.json()),
@@ -102,6 +122,76 @@ function buildBar(forecastMonths) {
   }).join('') + '</div>';
 }
 
+// SVG 선 그래프 생성
+function buildSVGChart(vals, curYYMM) {
+  const W = 800, H = 200, PAD_L = 40, PAD_R = 20, PAD_T = 20, PAD_B = 30;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
+  const max = Math.max(...vals, 1);
+  const stepX = chartW / (vals.length - 1);
+
+  // 당월 인덱스 (구분점)
+  const curIdx = MONTHS.indexOf(curYYMM);
+
+  // 점들
+  const points = vals.map((v, i) => ({
+    x: PAD_L + i * stepX,
+    y: PAD_T + chartH - (v / max * chartH),
+    v, i
+  }));
+
+  // 실적선 (초록) + 예측선 (주황)
+  let actualPath = '', forecastPath = '';
+  points.forEach((p, i) => {
+    const cmd = (i === 0 || (curIdx > 0 && i === curIdx)) ? 'M' : 'L';
+    if (i <= curIdx) actualPath += `${cmd}${p.x},${p.y} `;
+    if (i >= curIdx) {
+      if (i === curIdx) forecastPath += `M${p.x},${p.y} `;
+      else forecastPath += `L${p.x},${p.y} `;
+    }
+  });
+
+  // 축
+  let axis = `<line x1="${PAD_L}" y1="${H - PAD_B}" x2="${W - PAD_R}" y2="${H - PAD_B}" stroke="#ccc"/>`;
+  axis += `<line x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${H - PAD_B}" stroke="#ccc"/>`;
+
+  // Y축 레이블 (0, max/2, max)
+  axis += `<text x="${PAD_L - 5}" y="${PAD_T + 4}" text-anchor="end" font-size="10" fill="#888">${max}</text>`;
+  axis += `<text x="${PAD_L - 5}" y="${PAD_T + chartH / 2 + 4}" text-anchor="end" font-size="10" fill="#888">${Math.round(max / 2)}</text>`;
+  axis += `<text x="${PAD_L - 5}" y="${H - PAD_B + 4}" text-anchor="end" font-size="10" fill="#888">0</text>`;
+
+  // X축 레이블
+  MLABELS.forEach((l, i) => {
+    axis += `<text x="${PAD_L + i * stepX}" y="${H - PAD_B + 14}" text-anchor="middle" font-size="10" fill="#888">${l}</text>`;
+  });
+
+  // 점 원
+  let circles = '';
+  points.forEach((p, i) => {
+    const fill = i < curIdx ? '#4caf50' : (i === curIdx ? '#ffa726' : '#ff9800');
+    circles += `<circle cx="${p.x}" cy="${p.y}" r="4" fill="${fill}"><title>${MLABELS[i]}: ${p.v.toLocaleString()}</title></circle>`;
+    circles += `<text x="${p.x}" y="${p.y - 8}" text-anchor="middle" font-size="9" fill="#555">${p.v}</text>`;
+  });
+
+  return `<div style="background:#fff;border:1px solid #eee;border-radius:8px;padding:8px">
+    <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-width:100%">
+      ${axis}
+      <path d="${actualPath}" fill="none" stroke="#4caf50" stroke-width="2.5"/>
+      <path d="${forecastPath}" fill="none" stroke="#ff9800" stroke-width="2.5" stroke-dasharray="4,4"/>
+      ${circles}
+    </svg>
+  </div>`;
+}
+
+// 시즌마감 예상 판매율 계산
+function calcSeasonEndSellThrough(r) {
+  const fm = r.forecast_months || {};
+  const total = MONTHS.reduce((s, m) => s + (fm[m] || 0), 0);
+  const stor = r.stor_qty || 0;
+  if (stor === 0) return 0;
+  return Math.min(1, total / stor);
+}
+
 // ── 스타일/컬러 테이블 렌더링 ──
 function renderStyleTab(tabId, data, withColor) {
   const tab = document.getElementById('tab-' + tabId);
@@ -112,6 +202,9 @@ function renderStyleTab(tabId, data, withColor) {
   data.forEach((r, i) => {
     const rtPct = ((r.sale_rt || 0) * 100).toFixed(1);
     const rtCls = rtPct >= 20 ? 'rt-high' : (rtPct >= 10 ? 'rt-mid' : '');
+    const seasonRt = calcSeasonEndSellThrough(r);
+    const seasonRtPct = (seasonRt * 100).toFixed(0);
+    const seasonRtCls = seasonRt >= 0.9 ? 'rt-high' : (seasonRt >= 0.7 ? 'rt-mid' : '');
     const img = r.img_url ? `<img src="${r.img_url}" loading="lazy" onerror="this.style.display='none'">` : '';
     const bar = buildBar(r.forecast_months);
     const rem = r.est_remaining;
@@ -134,10 +227,10 @@ function renderStyleTab(tabId, data, withColor) {
       <td class="right">${(r.stock_qty || 0).toLocaleString()}</td>
       <td class="fc-cell">${bar}</td>
       <td class="right ${remCls}"><strong>${remStr}</strong></td>
+      <td class="right"><span class="rt-badge ${seasonRtCls}">${seasonRtPct}%</span></td>
     </tr>`;
   });
 
-  const co = withColor ? 1 : 0;
   const colorTh = withColor ? `<th>컬러</th>` : '';
 
   tab.innerHTML = `
@@ -151,7 +244,7 @@ function renderStyleTab(tabId, data, withColor) {
     <div class="count-info">${typeLabel} <strong>${data.length}</strong>개</div>
     <div class="tbl-wrap"><table class="dt" id="tbl-${tabId}"><thead><tr>
       <th>No</th><th>이미지</th><th>카테고리</th><th>성별</th><th>시즌</th><th>품번</th><th>제품명</th>
-      ${colorTh}<th>택가</th><th>입고</th><th>판매</th><th>판매율</th><th>재고</th><th>월별예상판매</th><th>예상잔여</th>
+      ${colorTh}<th>택가</th><th>입고</th><th>판매</th><th>판매율</th><th>재고</th><th>월별예상판매</th><th>예상잔여</th><th>마감예상판매율</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -192,13 +285,19 @@ async function showDetail(key) {
     let total = 0;
     const now = new Date();
     const curYYMM = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const vals = [];
     MONTHS.forEach(m => {
       const v = fm[m] || 0;
       total += v;
+      vals.push(v);
       const cls = m < curYYMM ? 'ma' : (m === curYYMM ? 'mm' : 'mf');
       h += `<td class="${cls}">${v.toLocaleString()}</td>`;
     });
     h += `<td style="font-weight:700">${total.toLocaleString()}</td></tr></table>`;
+
+    // SVG 선 그래프
+    h += '<div style="font-weight:700;margin:12px 0 6px">월별 판매 추이</div>';
+    h += buildSVGChart(vals, curYYMM);
 
     // 컬러별 (스타일 상세일 때)
     if (!color_cd && colors.length > 0) {
@@ -242,16 +341,24 @@ function renderCalcTab() {
       <div class="sc green"><div class="sl">결정 완료</div><div class="sv" id="calc-decided">${decidedRows.length}</div></div>
     </div>
     <div class="section-title">리오더 계산</div>
+    <div class="action-bar" id="calc-bulk-bar" style="display:none">
+      <span style="font-size:11px;color:#555"><strong id="calc-selected-count">0</strong>개 선택됨</span>
+      <select id="bulk-decision" class="decision-select"><option value="">일괄 결정</option><option value="진행">리오더 진행</option><option value="보류">보류</option><option value="불필요">불필요</option></select>
+      <input type="date" id="bulk-delivery" class="calc-date">
+      <button class="btn btn-primary btn-sm" onclick="applyBulk()">일괄 적용</button>
+      <button class="btn btn-secondary btn-sm" onclick="clearCalcSelection()">선택 해제</button>
+    </div>
     <div class="tbl-wrap"><table class="dt" id="tbl-calc-pending"><thead><tr>
+      <th><input type="checkbox" id="calc-check-all" onchange="toggleAllCalc(this.checked)"></th>
       <th>No</th><th>구분</th><th>카테고리</th><th>품번</th><th>제품명</th><th>컬러</th>
-      <th>입고</th><th>예상잔여</th><th>부족수량</th><th>소진월</th><th>발주마감(8주)</th>
+      <th>입고</th><th>예상잔여</th><th>부족수량</th><th>안전재고</th><th>추천수량</th><th>소진월</th><th>발주마감(8주)</th>
       <th>리오더수량</th><th>리오더후잔여</th><th>합의납기일</th><th>결정</th><th>메모</th><th>삭제</th>
     </tr></thead><tbody id="calc-pending-body"></tbody></table></div>
     <div class="section-title" style="margin-top:24px">리오더 결정사항</div>
     <div class="action-bar"><button class="btn btn-primary" onclick="exportDecidedCSV()">CSV 내보내기</button></div>
     <div class="tbl-wrap"><table class="dt" id="tbl-calc-decided"><thead><tr>
       <th>No</th><th>구분</th><th>카테고리</th><th>품번</th><th>제품명</th><th>컬러</th>
-      <th>입고</th><th>예상잔여</th><th>리오더수량</th><th>합의납기일</th><th>결정</th><th>메모</th><th>재점검</th><th>되돌리기</th>
+      <th>입고</th><th>예상잔여</th><th>리오더수량</th><th>합의납기일</th><th>결정</th><th>메모</th><th>재점검</th><th>이력</th><th>되돌리기</th>
     </tr></thead><tbody id="calc-decided-body"></tbody></table></div>
   `;
   renderCalcRows();
@@ -301,8 +408,9 @@ function addToCalcDirect(item, colorCd) {
   const shortage = rem !== null && rem < 0 ? Math.abs(rem) : 0;
   const tp = item.sesn && item.sesn.endsWith('N') ? '용품' : '의류';
 
-  // 소진월 계산
   const fm = item.forecast_months || {};
+
+  // 소진월 계산
   let soMonth = null, cumul = 0;
   for (const m of MONTHS) { cumul += (fm[m] || 0); if (cumul >= (item.stor_qty || 0)) { soMonth = m; break; } }
 
@@ -313,12 +421,29 @@ function addToCalcDirect(item, colorCd) {
     deadline = (dl8.getMonth() + 1) + '/' + dl8.getDate();
   }
 
+  // 안전재고 = 최근 4주(=1개월) 평균판매 × 2주 / 4주
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  const prevM = curM === 1 ? 12 : curM - 1;
+  const prevY = curM === 1 ? curY - 1 : curY;
+  const prevKey = `${prevY}${String(prevM).padStart(2, '0')}`;
+  const recentMonthSale = fm[prevKey] || 0;
+  const safetyStock = Math.round(recentMonthSale * SAFETY_STOCK_WEEKS / 4);
+
+  // 리드타임 버퍼 = 최근 월 평균 × (리드타임/4.33주)
+  const leadTimeBuffer = Math.round(recentMonthSale * LEAD_TIME_WEEKS / 4.33);
+
+  // 추천 리오더 수량 = 부족분 + 안전재고
+  const recommendedQty = shortage + safetyStock;
+
   calcRows.push({
     id: calcId++, key, cd: item.prdt_cd, cc: colorCd, nm: item.prdt_nm || '',
     ig: item.item_group || '', tp, stor: item.stor_qty || 0, rem,
     saleRt: item.sale_rt || 0,
-    shortage, soMonth, deadline,
-    reorderQty: shortage, decision: '', memo: '', deliveryDate: ''
+    shortage, safetyStock, leadTimeBuffer, recommendedQty,
+    soMonth, deadline,
+    reorderQty: recommendedQty, decision: '', memo: '', deliveryDate: ''
   });
   renderCalcRows();
 }
@@ -333,7 +458,9 @@ function renderCalcRows() {
     const after = (r.rem || 0) + r.reorderQty;
     const afterStyle = after >= 0 ? 'color:#2e7d32' : 'color:#d32f2f';
     const shortCd = r.cd.length > 9 ? r.cd.slice(-9) : r.cd;
+    const checked = selectedCalcIds.has(r.id) ? 'checked' : '';
     return `<tr>
+      <td><input type="checkbox" class="calc-check" data-id="${r.id}" ${checked} onchange="toggleCalcRow(${r.id},this.checked)"></td>
       <td>${i + 1}</td><td>${r.tp}</td><td>${r.ig}</td>
       <td class="cd clickable" data-key="${r.key}">${shortCd}</td>
       <td class="left pnm clickable" data-key="${r.key}">${r.nm}</td>
@@ -341,6 +468,8 @@ function renderCalcRows() {
       <td class="right">${r.stor.toLocaleString()}</td>
       <td class="right ${remCls}">${r.rem !== null ? r.rem.toLocaleString() : '-'}</td>
       <td class="right">${(r.shortage || 0).toLocaleString()}</td>
+      <td class="right">${(r.safetyStock || 0).toLocaleString()}</td>
+      <td class="right" style="background:#e3f0ff;font-weight:700">${(r.recommendedQty || 0).toLocaleString()}</td>
       <td>${soLabel}</td><td>${r.deadline}</td>
       <td><input type="number" class="calc-reorder-qty" value="${r.reorderQty}" min="0" onchange="updateCalcQty(${r.id},this.value)"></td>
       <td class="right" style="${afterStyle};font-weight:700">${(after >= 0 ? '+' : '') + after.toLocaleString()}</td>
@@ -349,6 +478,7 @@ function renderCalcRows() {
       <td><input type="text" class="reorder-memo" value="${r.memo}" onchange="updateCalcMemo(${r.id},this.value)"></td>
       <td><button class="btn btn-danger btn-sm" onclick="removeCalcRow(${r.id})">×</button></td></tr>`;
   }).join('');
+  updateBulkBar();
 
   // clickable 바인딩
   pb.querySelectorAll('.clickable[data-key]').forEach(el => {
@@ -361,8 +491,9 @@ function renderCalcRows() {
   const db = document.getElementById('calc-decided-body');
   db.innerHTML = decidedRows.map((r, i) => {
     const reviewTag = r.needsReview ? `<span class="review-badge" title="${r.reviewReason || ''}">재점검</span>` : '';
+    const rowCls = r.needsReview ? 'row-review' : '';
     const shortCd = r.cd.length > 9 ? r.cd.slice(-9) : r.cd;
-    return `<tr>
+    return `<tr class="${rowCls}">
       <td>${i + 1}</td><td>${r.tp || ''}</td><td>${r.ig || ''}</td>
       <td class="cd clickable" data-key="${r.key}">${shortCd}</td>
       <td class="left pnm clickable" data-key="${r.key}">${r.nm}</td>
@@ -373,6 +504,7 @@ function renderCalcRows() {
       <td><input type="date" class="calc-date" value="${r.deliveryDate || ''}" onchange="updateDecidedDate(${r.id},this.value)"></td>
       <td><strong>${r.decision}</strong></td><td>${r.memo || ''}</td>
       <td>${reviewTag}</td>
+      <td><button class="btn btn-secondary btn-sm" data-prdt="${r.cd}" data-cc="${r.cc || ''}" onclick="showHistory(this.dataset.prdt,this.dataset.cc)">📜</button></td>
       <td><button class="btn btn-secondary btn-sm" onclick="undoDecision(${r.id})">↩</button></td></tr>`;
   }).join('');
 
@@ -475,12 +607,20 @@ function renderReviewPanel() {
   const body = document.getElementById('review-body');
   if (!items.length) { body.innerHTML = '<div style="text-align:center;padding:40px;color:#888">모든 아이템이 점검 완료되었습니다.</div>'; return; }
 
-  body.innerHTML = items.map((x, i) => {
+  const toolbar = `<div style="padding:10px 12px;border-bottom:1px solid #eef0f4;display:flex;gap:8px;align-items:center;background:#fafbfd;position:sticky;top:0;z-index:2">
+    <label style="font-size:11px;cursor:pointer"><input type="checkbox" id="review-check-all" onchange="toggleAllReview(this.checked)"> 전체선택</label>
+    <span style="flex:1;font-size:11px;color:#555"><strong id="review-selected-count">${selectedReviewKeys.size}</strong>개 선택</span>
+    <button id="review-bulk-add" class="btn btn-primary btn-sm" style="display:${selectedReviewKeys.size > 0 ? 'inline-block' : 'none'}" onclick="addSelectedToCalc()">선택 항목 추가</button>
+  </div>`;
+
+  body.innerHTML = toolbar + items.map((x, i) => {
     const img = x.img_url ? `<img class="ri-img" src="${x.img_url}" onerror="this.style.display='none'">` : '<div class="ri-img"></div>';
     const shortCd = x.prdt_cd.length > 9 ? x.prdt_cd.slice(-9) : x.prdt_cd;
     const key = x.prdt_cd + '|' + (x.color_cd || '');
     const tp = x.sesn && x.sesn.endsWith('N') ? '용품' : '의류';
+    const checked = selectedReviewKeys.has(key) ? 'checked' : '';
     return `<div class="review-item">
+      <input type="checkbox" class="ri-check" data-key="${key}" ${checked} onchange="toggleReviewItem('${key}',this.checked)">
       ${img}
       <div class="ri-info">
         <span class="ri-cd" data-key="${key}">${shortCd}</span> ${x.color_cd ? '<span class="ri-cc">' + x.color_cd + '</span>' : ''}
@@ -488,7 +628,7 @@ function renderReviewPanel() {
         <div class="ri-meta">${tp} · ${x.item_group || ''} · 판매율 ${((x.sale_rt || 0) * 100).toFixed(1)}% · 입고 ${(x.stor_qty || 0).toLocaleString()}</div>
       </div>
       <div class="ri-rem">${(x.est_remaining || 0).toLocaleString()}</div>
-      <button class="ri-btn" data-idx="${i}">계산기 추가</button>
+      <button class="ri-btn" data-idx="${i}">추가</button>
     </div>`;
   }).join('');
 
@@ -503,6 +643,138 @@ function renderReviewPanel() {
       if (filtered[idx]) { addToCalcDirect(filtered[idx], filtered[idx].color_cd || ''); renderReviewPanel(); }
     };
   });
+}
+
+function toggleAllReview(checked) {
+  const decidedKeys = new Set([...calcRows.map(r => r.key), ...decidedRows.map(r => r.key)]);
+  const items = reviewData.filter(r => !decidedKeys.has(r.prdt_cd + '|' + (r.color_cd || '')));
+  if (checked) {
+    selectedReviewKeys = new Set(items.map(r => r.prdt_cd + '|' + (r.color_cd || '')));
+  } else {
+    selectedReviewKeys.clear();
+  }
+  renderReviewPanel();
+}
+
+// ── 일괄 편집 ──
+function toggleCalcRow(id, checked) {
+  if (checked) selectedCalcIds.add(id);
+  else selectedCalcIds.delete(id);
+  updateBulkBar();
+}
+function toggleAllCalc(checked) {
+  selectedCalcIds = new Set(checked ? calcRows.map(r => r.id) : []);
+  renderCalcRows();
+}
+function clearCalcSelection() {
+  selectedCalcIds.clear();
+  renderCalcRows();
+}
+function updateBulkBar() {
+  const n = selectedCalcIds.size;
+  const bar = document.getElementById('calc-bulk-bar');
+  if (!bar) return;
+  bar.style.display = n > 0 ? 'flex' : 'none';
+  const cnt = document.getElementById('calc-selected-count');
+  if (cnt) cnt.textContent = n;
+}
+async function applyBulk() {
+  const decision = document.getElementById('bulk-decision').value;
+  const delivery = document.getElementById('bulk-delivery').value;
+  if (!decision && !delivery) { alert('일괄 결정 또는 납기일을 선택해주세요.'); return; }
+
+  const targetIds = [...selectedCalcIds];
+  for (const id of targetIds) {
+    const r = calcRows.find(x => x.id === id);
+    if (!r) continue;
+    if (delivery) r.deliveryDate = delivery;
+    if (decision) {
+      r.decision = decision;
+    }
+  }
+
+  // 결정이 있으면 모두 결정사항으로 이동
+  if (decision) {
+    const moving = calcRows.filter(r => selectedCalcIds.has(r.id));
+    calcRows = calcRows.filter(r => !selectedCalcIds.has(r.id));
+    decidedRows.push(...moving);
+    for (const r of moving) {
+      await saveDecisionToServer(r);
+    }
+  }
+
+  selectedCalcIds.clear();
+  document.getElementById('bulk-decision').value = '';
+  document.getElementById('bulk-delivery').value = '';
+  renderCalcRows();
+}
+
+async function saveDecisionToServer(r) {
+  try {
+    await fetch(API + '/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prdt_cd: r.cd, color_cd: r.cc, item_type: 'color',
+        prdt_nm: r.nm, item_group: r.ig, category_type: r.tp,
+        decision: r.decision, reorder_qty: r.reorderQty, memo: r.memo,
+        agreed_delivery_date: r.deliveryDate || null,
+        decided_by: currentUser,
+        snapshot_stor_qty: r.stor, snapshot_est_remaining: r.rem, snapshot_sale_rt: r.saleRt,
+      })
+    });
+  } catch (e) { console.error(e); }
+}
+
+// ── 변경 이력 모달 ──
+async function showHistory(prdt_cd, color_cd) {
+  try {
+    const res = await fetch(API + '/api/history/' + prdt_cd + '/' + (color_cd || ''));
+    const history = await res.json();
+
+    let h = '<button class="modal-close" onclick="closeModal()">&times;</button>';
+    h += `<h2>변경 이력</h2>`;
+    h += `<div class="modal-sub">${prdt_cd.slice(-9)}${color_cd ? ' / ' + color_cd : ''}</div>`;
+
+    if (!history.length) {
+      h += '<div style="padding:40px;text-align:center;color:#888">이력이 없습니다.</div>';
+    } else {
+      h += '<table class="month-table"><thead><tr><th>시간</th><th>작업</th><th>결정</th><th>리오더수량</th><th>납기일</th><th>메모</th><th>변경자</th></tr></thead><tbody>';
+      for (const entry of history) {
+        const date = new Date(entry.changed_at).toLocaleString('ko-KR');
+        const actionLabel = entry.action === 'create' ? '생성' : (entry.action === 'update' ? '수정' : '삭제');
+        const decChange = entry.prev_decision !== entry.new_decision ? `${entry.prev_decision || '-'} → <strong>${entry.new_decision || '-'}</strong>` : entry.new_decision || '-';
+        const qtyChange = entry.prev_reorder_qty !== entry.new_reorder_qty ? `${entry.prev_reorder_qty ?? '-'} → <strong>${entry.new_reorder_qty ?? '-'}</strong>` : (entry.new_reorder_qty ?? '-');
+        const dateChange = entry.prev_delivery_date !== entry.new_delivery_date ? `${entry.prev_delivery_date || '-'} → <strong>${entry.new_delivery_date || '-'}</strong>` : (entry.new_delivery_date || '-');
+        h += `<tr><td style="font-size:10px">${date}</td><td>${actionLabel}</td><td>${decChange}</td><td>${qtyChange}</td><td>${dateChange}</td><td>${entry.new_memo || '-'}</td><td>${entry.changed_by || '-'}</td></tr>`;
+      }
+      h += '</tbody></table>';
+    }
+
+    document.getElementById('modal-content').innerHTML = h;
+    document.getElementById('modal-bg').classList.add('open');
+  } catch (e) {
+    alert('이력 조회 실패: ' + e.message);
+  }
+}
+
+// ── 리오더 점검 패널 다중 선택 ──
+function toggleReviewItem(key, checked) {
+  if (checked) selectedReviewKeys.add(key);
+  else selectedReviewKeys.delete(key);
+  const countEl = document.getElementById('review-selected-count');
+  if (countEl) countEl.textContent = selectedReviewKeys.size;
+  const btn = document.getElementById('review-bulk-add');
+  if (btn) btn.style.display = selectedReviewKeys.size > 0 ? 'inline-block' : 'none';
+}
+function addSelectedToCalc() {
+  const keys = [...selectedReviewKeys];
+  for (const key of keys) {
+    const item = reviewData.find(r => (r.prdt_cd + '|' + (r.color_cd || '')) === key);
+    if (item) addToCalcDirect(item, item.color_cd || '');
+  }
+  selectedReviewKeys.clear();
+  renderReviewPanel();
 }
 
 // ── CSV 내보내기 ──
