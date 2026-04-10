@@ -7,7 +7,7 @@ const API = ''; // 같은 origin이므로 빈 문자열
 const MONTHS = ['202601','202602','202603','202604','202605','202606','202607','202608','202609','202610','202611','202612'];
 const MLABELS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
 const LEAD_TIME_WEEKS = 10; // 리드타임 평균 (8~12주)
-const SAFETY_STOCK_WEEKS = 2; // 안전재고 주수
+let TARGET_SELL_THROUGH = parseFloat(localStorage.getItem('st_target_st') || '0.75'); // 목표 판매율 기본 75%
 
 let styleData = [];
 let colorData = [];
@@ -120,6 +120,130 @@ function buildBar(forecastMonths) {
     const cls = m < curYYMM ? 'bar-a' : (m === curYYMM ? 'bar-m' : 'bar-f');
     return `<div class="bc" title="${MLABELS[i]}: ${v.toLocaleString()}"><div class="b ${cls}" style="height:${h}px"></div><div class="bv">${v}</div><div class="bm">${MLABELS[i].slice(0,2)}</div></div>`;
   }).join('') + '</div>';
+}
+
+// ── 신규 컬러 추가 모달 ──
+let _newColorParent = null;
+
+function openNewColorModal() {
+  _newColorParent = null;
+  let h = '<button class="modal-close" onclick="closeModal()">&times;</button>';
+  h += '<h2>신규 컬러 리오더 추가</h2>';
+  h += '<div class="modal-sub">기존에 없던 컬러를 수기로 추가하여 리오더 계산</div>';
+  h += '<div style="margin-bottom:12px">';
+  h += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">1. 부모 스타일 선택</label>';
+  h += '<input type="text" id="new-color-search" placeholder="품번 또는 제품명 검색" style="width:100%;padding:10px;border:2px solid #006AE6;border-radius:6px;font-size:13px" oninput="onNewColorSearch()">';
+  h += '<div id="new-color-suggestions" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;margin-top:4px;display:none"></div>';
+  h += '<div id="new-color-selected" style="margin-top:8px"></div>';
+  h += '</div>';
+  h += '<div style="margin-bottom:12px">';
+  h += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">2. 새 컬러코드 (예: MGS, GNS)</label>';
+  h += '<input type="text" id="new-color-cd" placeholder="컬러코드" style="width:200px;padding:8px;border:1px solid #d0d3da;border-radius:6px;font-size:13px" maxlength="5">';
+  h += '</div>';
+  h += '<div style="margin-bottom:16px">';
+  h += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">3. 예상판매 산정 방식</label>';
+  h += '<label style="font-size:12px;margin-right:16px"><input type="radio" name="fc-mode" value="avg" checked> 부모 스타일 컬러 평균</label>';
+  h += '<label style="font-size:12px"><input type="radio" name="fc-mode" value="max"> 기존 최대 컬러 기준</label>';
+  h += '</div>';
+  h += '<div style="text-align:right"><button class="btn btn-primary" onclick="submitNewColor()">추가</button></div>';
+  document.getElementById('modal-content').innerHTML = h;
+  document.getElementById('modal-bg').classList.add('open');
+}
+
+async function onNewColorSearch() {
+  const q = document.getElementById('new-color-search').value;
+  if (q.length < 2) return;
+  try {
+    // 스타일 단위로 검색 (parent용)
+    const res = await fetch(API + '/api/search?q=' + encodeURIComponent(q));
+    const items = await res.json();
+    // 스타일 기준 유니크하게
+    const seen = new Set();
+    const styles = [];
+    for (const x of items) {
+      if (seen.has(x.prdt_cd)) continue;
+      seen.add(x.prdt_cd);
+      styles.push(x);
+    }
+    const sg = document.getElementById('new-color-suggestions');
+    sg.innerHTML = styles.slice(0, 10).map(x => {
+      const shortCd = x.prdt_cd.length > 9 ? x.prdt_cd.slice(-9) : x.prdt_cd;
+      return `<div class="sug-item" onclick="selectNewColorParent('${x.prdt_cd}')"><span class="sug-cd">${shortCd}</span><span class="sug-nm">${x.prdt_nm}</span><span class="sug-ig">${x.item_group}</span></div>`;
+    }).join('');
+    sg.style.display = 'block';
+  } catch (e) {}
+}
+
+async function selectNewColorParent(prdt_cd) {
+  try {
+    const res = await fetch(API + '/api/detail/' + prdt_cd);
+    const { style, colors } = await res.json();
+    if (!style) { alert('스타일 정보를 찾을 수 없습니다.'); return; }
+    _newColorParent = { style, colors };
+    const shortCd = style.prdt_cd.length > 9 ? style.prdt_cd.slice(-9) : style.prdt_cd;
+    document.getElementById('new-color-selected').innerHTML =
+      `<div style="background:#e3f0ff;padding:10px;border-radius:6px;font-size:12px">
+        선택됨: <strong>${shortCd}</strong> ${style.prdt_nm}
+        <div style="color:#666;margin-top:4px">카테고리: ${style.item_group} · 기존 컬러: ${colors.map(c => c.color_cd).join(', ') || '없음'}</div>
+      </div>`;
+    document.getElementById('new-color-suggestions').style.display = 'none';
+    document.getElementById('new-color-search').value = shortCd + ' ' + style.prdt_nm;
+  } catch (e) { alert('조회 실패: ' + e.message); }
+}
+
+function submitNewColor() {
+  if (!_newColorParent) { alert('부모 스타일을 먼저 선택해주세요.'); return; }
+  const colorCd = document.getElementById('new-color-cd').value.trim().toUpperCase();
+  if (!colorCd) { alert('컬러코드를 입력해주세요.'); return; }
+
+  const { style, colors } = _newColorParent;
+  // 이미 있는 컬러 체크 (앞 2자리 기준)
+  const cg = colorCd.slice(0, 2);
+  if (colors.find(c => c.color_cd.slice(0, 2) === cg)) {
+    if (!confirm(`컬러그룹 '${cg}'가 이미 존재합니다. 그래도 추가하시겠습니까?`)) return;
+  }
+
+  // 예상판매 산정
+  const mode = document.querySelector('input[name="fc-mode"]:checked').value;
+  const fm = {};
+
+  if (mode === 'avg') {
+    // 부모 스타일 전체 forecast / (기존 컬러 수 + 1)
+    const parentFm = style.forecast_months || {};
+    const divisor = (colors.length || 0) + 1;
+    for (const m of MONTHS) {
+      fm[m] = Math.round((parentFm[m] || 0) / divisor);
+    }
+  } else {
+    // 기존 최대 판매 컬러의 forecast 그대로
+    if (!colors.length) {
+      alert('기존 컬러가 없습니다. 평균 모드를 사용해주세요.');
+      return;
+    }
+    const top = colors.reduce((a, b) => (a.sale_qty || 0) > (b.sale_qty || 0) ? a : b);
+    const topFm = top.forecast_months || {};
+    for (const m of MONTHS) fm[m] = topFm[m] || 0;
+  }
+
+  // 가상 아이템 생성
+  const virtualItem = {
+    prdt_cd: style.prdt_cd,
+    color_cd: colorCd,
+    prdt_nm: style.prdt_nm,
+    item_group: style.item_group,
+    sesn: style.sesn,
+    sex: style.sex,
+    stor_qty: 0,  // 신규니까 재고 0
+    sale_qty: 0,
+    stock_qty: 0,
+    sale_rt: 0,
+    est_remaining: 0 - MONTHS.reduce((s, m) => s + (fm[m] || 0), 0),
+    forecast_months: fm,
+    img_url: style.img_url,
+  };
+
+  addToCalcDirect(virtualItem, colorCd, { isNewColor: true, memo: '신규 컬러' });
+  closeModal();
 }
 
 // SVG 선 그래프 생성
@@ -330,9 +454,15 @@ function closeModal() { document.getElementById('modal-bg').classList.remove('op
 
 // ── 리오더 계산기 ──
 function renderCalcTab() {
+  const curTarget = Math.round(TARGET_SELL_THROUGH * 100);
   document.getElementById('tab-calc').innerHTML = `
     <div class="calc-input-area" style="position:relative">
-      <div style="font-size:14px;font-weight:700;margin-bottom:8px;color:#1a237e">리오더 아이템 추가</div>
+      <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <div style="font-size:14px;font-weight:700;color:#1a237e;flex:1">리오더 아이템 추가</div>
+        <label style="font-size:11px;color:#555">목표 판매율: <strong id="target-st-label">${curTarget}%</strong></label>
+        <input type="range" min="60" max="90" step="5" value="${curTarget}" oninput="updateTargetSellThrough(this.value/100)" style="width:140px">
+        <button class="btn btn-secondary btn-sm" onclick="openNewColorModal()">+ 신규 컬러 추가</button>
+      </div>
       <input class="calc-search" id="calc-search" placeholder="품번 또는 제품명을 입력하여 검색" oninput="onCalcSearch()" onfocus="onCalcSearch()">
       <div class="calc-suggestions" id="calc-suggestions"></div>
     </div>
@@ -351,8 +481,8 @@ function renderCalcTab() {
     <div class="tbl-wrap"><table class="dt" id="tbl-calc-pending"><thead><tr>
       <th><input type="checkbox" id="calc-check-all" onchange="toggleAllCalc(this.checked)"></th>
       <th>No</th><th>구분</th><th>카테고리</th><th>품번</th><th>제품명</th><th>컬러</th>
-      <th>입고</th><th>예상잔여</th><th>부족수량</th><th>안전재고</th><th>추천수량</th><th>소진월</th><th>발주마감(8주)</th>
-      <th>리오더수량</th><th>리오더후잔여</th><th>합의납기일</th><th>결정</th><th>메모</th><th>삭제</th>
+      <th>현재입고</th><th>총예상판매</th><th>필요총입고</th><th>추천수량</th><th>소진월</th><th>발주마감(8주)</th>
+      <th>리오더수량</th><th>리오더후 최종판매율</th><th>합의납기일</th><th>결정</th><th>메모</th><th>삭제</th>
     </tr></thead><tbody id="calc-pending-body"></tbody></table></div>
     <div class="section-title" style="margin-top:24px">리오더 결정사항</div>
     <div class="action-bar"><button class="btn btn-primary" onclick="exportDecidedCSV()">CSV 내보내기</button></div>
@@ -400,14 +530,23 @@ function addToCalcByIdx(idx) {
   document.getElementById('calc-suggestions').style.display = 'none';
 }
 
-function addToCalcDirect(item, colorCd) {
+// 목표 판매율 기반 추천 리오더 수량 계산
+function calcRecommended(storQty, forecastMonths) {
+  const total = MONTHS.reduce((s, m) => s + (forecastMonths[m] || 0), 0);
+  if (total === 0) return { total, required: storQty, reorder: 0, finalSellRt: 0 };
+  const required = Math.ceil(total / TARGET_SELL_THROUGH);
+  const reorder = Math.max(0, required - storQty);
+  const finalStor = storQty + reorder;
+  const finalSellRt = finalStor > 0 ? total / finalStor : 0;
+  return { total, required, reorder, finalSellRt };
+}
+
+function addToCalcDirect(item, colorCd, opts = {}) {
   const key = colorCd ? item.prdt_cd + '|' + colorCd : item.prdt_cd;
   if (calcRows.find(r => r.key === key) || decidedRows.find(r => r.key === key)) return;
 
   const rem = item.est_remaining;
-  const shortage = rem !== null && rem < 0 ? Math.abs(rem) : 0;
   const tp = item.sesn && item.sesn.endsWith('N') ? '용품' : '의류';
-
   const fm = item.forecast_months || {};
 
   // 소진월 계산
@@ -421,31 +560,38 @@ function addToCalcDirect(item, colorCd) {
     deadline = (dl8.getMonth() + 1) + '/' + dl8.getDate();
   }
 
-  // 안전재고 = 최근 4주(=1개월) 평균판매 × 2주 / 4주
-  const now = new Date();
-  const curY = now.getFullYear();
-  const curM = now.getMonth() + 1;
-  const prevM = curM === 1 ? 12 : curM - 1;
-  const prevY = curM === 1 ? curY - 1 : curY;
-  const prevKey = `${prevY}${String(prevM).padStart(2, '0')}`;
-  const recentMonthSale = fm[prevKey] || 0;
-  const safetyStock = Math.round(recentMonthSale * SAFETY_STOCK_WEEKS / 4);
-
-  // 리드타임 버퍼 = 최근 월 평균 × (리드타임/4.33주)
-  const leadTimeBuffer = Math.round(recentMonthSale * LEAD_TIME_WEEKS / 4.33);
-
-  // 추천 리오더 수량 = 부족분 + 안전재고
-  const recommendedQty = shortage + safetyStock;
+  // 목표 판매율 기반 추천 수량
+  const rec = calcRecommended(item.stor_qty || 0, fm);
 
   calcRows.push({
     id: calcId++, key, cd: item.prdt_cd, cc: colorCd, nm: item.prdt_nm || '',
     ig: item.item_group || '', tp, stor: item.stor_qty || 0, rem,
     saleRt: item.sale_rt || 0,
-    shortage, safetyStock, leadTimeBuffer, recommendedQty,
+    totalForecast: rec.total, requiredTotal: rec.required,
+    recommendedQty: rec.reorder, finalSellRt: rec.finalSellRt,
     soMonth, deadline,
-    reorderQty: recommendedQty, decision: '', memo: '', deliveryDate: ''
+    isNewColor: opts.isNewColor || false,
+    forecastMonths: fm,
+    reorderQty: rec.reorder, decision: '', memo: opts.memo || '', deliveryDate: ''
   });
   renderCalcRows();
+}
+
+// 목표 판매율 변경 시 모든 계산기 행 재계산
+function updateTargetSellThrough(v) {
+  TARGET_SELL_THROUGH = v;
+  localStorage.setItem('st_target_st', v);
+  for (const r of calcRows) {
+    const rec = calcRecommended(r.stor, r.forecastMonths || {});
+    r.totalForecast = rec.total;
+    r.requiredTotal = rec.required;
+    r.recommendedQty = rec.reorder;
+    r.reorderQty = rec.reorder;
+    r.finalSellRt = rec.finalSellRt;
+  }
+  renderCalcRows();
+  const lbl = document.getElementById('target-st-label');
+  if (lbl) lbl.textContent = Math.round(v * 100) + '%';
 }
 
 function renderCalcRows() {
@@ -453,26 +599,29 @@ function renderCalcRows() {
   if (!pb) return;
 
   pb.innerHTML = calcRows.map((r, i) => {
-    const remCls = r.rem !== null && r.rem < 0 ? 'rem-danger' : '';
     const soLabel = r.soMonth ? '20' + r.soMonth.slice(2, 4) + '년' + parseInt(r.soMonth.slice(4)) + '월' : '-';
-    const after = (r.rem || 0) + r.reorderQty;
-    const afterStyle = after >= 0 ? 'color:#2e7d32' : 'color:#d32f2f';
+    // 리오더 후 최종 판매율 (사용자 입력 기준)
+    const finalStor = r.stor + (r.reorderQty || 0);
+    const finalRt = finalStor > 0 ? (r.totalForecast / finalStor) : 0;
+    const finalRtPct = (finalRt * 100).toFixed(0);
+    const rtInTarget = finalRt >= 0.7 && finalRt <= 0.85;
+    const rtCls = rtInTarget ? 'color:#2e7d32' : (finalRt > 0.85 ? 'color:#d32f2f' : 'color:#e65100');
     const shortCd = r.cd.length > 9 ? r.cd.slice(-9) : r.cd;
     const checked = selectedCalcIds.has(r.id) ? 'checked' : '';
+    const newColorBadge = r.isNewColor ? '<span style="background:#e8f5e9;color:#2e7d32;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:4px">신규</span>' : '';
     return `<tr>
       <td><input type="checkbox" class="calc-check" data-id="${r.id}" ${checked} onchange="toggleCalcRow(${r.id},this.checked)"></td>
       <td>${i + 1}</td><td>${r.tp}</td><td>${r.ig}</td>
       <td class="cd clickable" data-key="${r.key}">${shortCd}</td>
-      <td class="left pnm clickable" data-key="${r.key}">${r.nm}</td>
+      <td class="left pnm clickable" data-key="${r.key}">${r.nm}${newColorBadge}</td>
       <td>${r.cc || '-'}</td>
       <td class="right">${r.stor.toLocaleString()}</td>
-      <td class="right ${remCls}">${r.rem !== null ? r.rem.toLocaleString() : '-'}</td>
-      <td class="right">${(r.shortage || 0).toLocaleString()}</td>
-      <td class="right">${(r.safetyStock || 0).toLocaleString()}</td>
+      <td class="right">${(r.totalForecast || 0).toLocaleString()}</td>
+      <td class="right">${(r.requiredTotal || 0).toLocaleString()}</td>
       <td class="right" style="background:#e3f0ff;font-weight:700">${(r.recommendedQty || 0).toLocaleString()}</td>
       <td>${soLabel}</td><td>${r.deadline}</td>
       <td><input type="number" class="calc-reorder-qty" value="${r.reorderQty}" min="0" onchange="updateCalcQty(${r.id},this.value)"></td>
-      <td class="right" style="${afterStyle};font-weight:700">${(after >= 0 ? '+' : '') + after.toLocaleString()}</td>
+      <td class="right" style="${rtCls};font-weight:700">${finalRtPct}%</td>
       <td><input type="date" class="calc-date" value="${r.deliveryDate || ''}" onchange="updateCalcDate(${r.id},this.value)"></td>
       <td><select class="decision-select" onchange="onDecision(${r.id},this.value)"><option value="">선택</option><option value="진행">리오더 진행</option><option value="보류">보류</option><option value="불필요">불필요</option></select></td>
       <td><input type="text" class="reorder-memo" value="${r.memo}" onchange="updateCalcMemo(${r.id},this.value)"></td>
